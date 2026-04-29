@@ -96,6 +96,11 @@ def main(args):
 
     ckpt = torch.load(args.ckpt_path, map_location='cpu')
     model.load_state_dict(ckpt, strict=False)
+    model.aggregator.use_learned_scorer = True
+    stage2_ckpt = torch.load("./checkpoints/stage2_scannet/stage2_scannet_final.pt", map_location="cpu")
+    scorer_sd = {k.replace("aggregator.token_scorer.", ""): v for k, v in stage2_ckpt["model_state_dict"].items() if "token_scorer" in k}
+    model.aggregator.token_scorer.load_state_dict(scorer_sd)
+    print("Stage2 scorer loaded, keys:", len(scorer_sd))
     model.to(torch.bfloat16)
     model.eval()
     print("Model loaded")
@@ -142,7 +147,7 @@ def main(args):
                 amax_history_len=80,
                 amax_compute_algo="max",
             )
-        with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe):
+        with te.fp8_autocast(enabled=False, fp8_recipe=fp8_recipe):
             aggregated_tokens_list, patch_start_idx = model.aggregator(images)
 
         with torch.amp.autocast("cuda",enabled=True, dtype=dtype):
@@ -176,6 +181,7 @@ def main(args):
         conf_flat = conf_flat[keep_indices]
 
         save_ply(points,colors,args.output_dir,name="recon.ply",max_points=15000000)
+        np.save(os.path.join(args.output_dir, "pred_poses.npy"), w2c_pre.squeeze(0).cpu().float().numpy())
 
         print("done!")
 

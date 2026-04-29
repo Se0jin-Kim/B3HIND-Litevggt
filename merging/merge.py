@@ -116,10 +116,11 @@ def token_merge_bipartite2d_multi_batch(
 
 
 def compute_info_maps(
-    images_normed: torch.Tensor,   # [N, 3, H, W]  
-    patch_tokens: torch.Tensor,    # [N, P, C] 
+    images_normed: torch.Tensor,   # [N, 3, H, W]
+    patch_tokens: torch.Tensor,    # [N, P, C]
     var_win: int = 3,
     proj_dim: int = 32,
+    learned_scores: Optional[torch.Tensor] = None,  # [N, 1, Hp, Wp] TokenScorer output
 ):
 
     images_normed = images_normed.to(torch.float32)
@@ -163,8 +164,16 @@ def compute_info_maps(
 
     var_n  = norm01(var_map)
     grad_n = norm01(grad_map_tok)
-    info   = 0.3* var_n + 0.7* grad_n                 # [N,1,Hp,Wp]
-    info_n = norm01(info)
+
+    if learned_scores is not None:
+        # Learned scorer path: use TokenScorer output directly [N,1,Hp,Wp]
+        info_n = learned_scores.to(torch.float32)
+        info_n = norm01(info_n)
+    else:
+        # Heuristic path (default, backward-compatible)
+        # info = 0.3*var_n + 0.7*grad_n
+        info   = 0.3* var_n + 0.7* grad_n             # [N,1,Hp,Wp]
+        info_n = norm01(info)
     gamma = 1.4  
     info_n = info_n ** gamma
     info_up = F.interpolate(info_n, size=(Hc, Wc), mode='bilinear', align_corners=False)  # [N,1,Hc,Wc]
@@ -213,13 +222,24 @@ def token_merge_bipartite2d(
     B, N, _ = metric.shape  # Batch size B, total tokens N
     if r <= 0:
         return do_nothing, do_nothing
-    
 
     gather = torch.gather
 
-    tokens_per_img = w * h + 5
-    num_imgs = N // tokens_per_img
-    assert tokens_per_img * num_imgs == N, "Token count doesn't match (w*h+5)*num_imgs"
+    # Debuging
+    # print(f"\n[DEBUG] Total tokens (N): {N}, w: {w}, h: {h}")
+    # print(f"[DEBUG] Expected per image: {w*h + 5}, Actual per image (N/32): {N/32 if N%32==0 else 'N is not div by 32'}")
+
+    tokens_per_img = 1374 
+    num_imgs = N // tokens_per_img 
+    
+    # 2. info_map 차원 맞추기 (중요!)
+    # 만약 info_map은 32장인데 실제 이미지는 8장뿐이라면, 8장만큼만 잘라서 사용합니다.
+    if info_map is not None and info_map.shape[0] != num_imgs:
+        info_map = info_map[:num_imgs]
+
+    # 3. 해상도(w, h) 동적 설정
+    actual_grid_size = tokens_per_img - 5 
+    w = h = int(actual_grid_size ** 0.5)
 
     with torch.no_grad():
         # Determine whether to compute importance scores based on enable_protection

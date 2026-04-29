@@ -19,7 +19,12 @@ from .attention import Attention
 from .drop_path import DropPath
 from .layer_scale import LayerScale
 from .mlp import Mlp
-import transformer_engine.pytorch as te
+try:
+    import transformer_engine.pytorch as te
+    HAS_TE = True
+except ImportError:
+    from vggt.utils import te_fallback as te
+    HAS_TE = False
 
 XFORMERS_AVAILABLE = False
 

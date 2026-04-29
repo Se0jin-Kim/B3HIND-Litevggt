@@ -6,7 +6,12 @@ from tqdm.std import tqdm
 import matplotlib.pyplot as plt
 import numpy as np
 
-import transformer_engine.pytorch as te
+try:
+    import transformer_engine.pytorch as te
+    HAS_TE = True
+except ImportError:
+    from vggt.utils import te_fallback as te
+    HAS_TE = False
 
 XFORMERS_AVAILABLE = False
 

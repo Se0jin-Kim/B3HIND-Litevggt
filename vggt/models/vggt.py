@@ -12,8 +12,14 @@ from vggt.models.aggregator import Aggregator
 from vggt.heads.camera_head import CameraHead
 from vggt.heads.dpt_head import DPTHead
 from vggt.heads.track_head import TrackHead
-import transformer_engine.pytorch as te
-from transformer_engine.common.recipe import Format, DelayedScaling
+try:
+    import transformer_engine.pytorch as te
+    from transformer_engine.common.recipe import Format, DelayedScaling
+    HAS_TE = True
+except ImportError:
+    from vggt.utils import te_fallback as te
+    from vggt.utils.te_fallback import Format, DelayedScaling
+    HAS_TE = False
 
 class VGGT(nn.Module, PyTorchModelHubMixin):
     def __init__(self, img_size=518, patch_size=14, embed_dim=1024,
@@ -66,7 +72,7 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
             amax_history_len=80,
             amax_compute_algo="max",
         )
-        with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe):
+        with te.fp8_autocast(enabled=False, fp8_recipe=fp8_recipe):
             aggregated_tokens_list, patch_start_idx = self.aggregator(images)
 
         with torch.amp.autocast("cuda",enabled=True, dtype=torch.bfloat16):

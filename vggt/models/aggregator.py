@@ -19,6 +19,7 @@ from vggt.layers.vision_transformer import vit_small, vit_base, vit_large, vit_g
 from merging.merge import (
     compute_info_maps
 )
+from merging.token_scorer import TokenScorer
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +155,31 @@ class Aggregator(nn.Module):
         self.cal_layer = [0, 6, 15, 20]
         self.m_u = None
 
+        # Learned token scorer (disabled by default; enable for fine-tuning)
+        self.use_learned_scorer: bool = False
+        self.token_scorer = TokenScorer(dim=embed_dim)
+
+    def set_learned_scorer_mode(self, enabled: bool) -> None:
+        """
+        Enable or disable the learned token scorer.
+
+        When enabled=True:
+          - TokenScorer replaces the heuristic GA map (0.3*var + 0.7*grad)
+          - token_scorer parameters are set to requires_grad=True
+          - all other aggregator parameters are frozen
+
+        When enabled=False:
+          - heuristic GA map is used (backward-compatible default)
+          - token_scorer parameters are set to requires_grad=False
+        """
+        self.use_learned_scorer = enabled
+        for p in self.token_scorer.parameters():
+            p.requires_grad = enabled
+        if enabled:
+            # Freeze everything except token_scorer
+            for name, p in self.named_parameters():
+                if not name.startswith("token_scorer."):
+                    p.requires_grad = False
 
     def __build_patch_embed__(
         self,
@@ -228,6 +254,7 @@ class Aggregator(nn.Module):
 
         N, P, C = patch_tokens.shape
         patch_tokens= patch_tokens.to(torch.bfloat16)
+        self._last_patch_tokens = patch_tokens  # Stage 2 keep-ratio 추정용
 
         pos = None
         if self.rope is not None:
@@ -235,7 +262,19 @@ class Aggregator(nn.Module):
         
         info_map = None
         if self.global_merging and self.use_info:
-            info_map = compute_info_maps(images,patch_tokens)["info_map"]
+            if self.use_learned_scorer:
+                # images shape: [N, 3, H, W]; patch_size=14 fixed
+                Hp = images.shape[-2] // self.patch_size
+                Wp = images.shape[-1] // self.patch_size
+                learned_scores = self.token_scorer(patch_tokens, Hp=Hp, Wp=Wp)
+                info_map = compute_info_maps(
+                    images, patch_tokens,
+                    learned_scores=learned_scores,
+                )["info_map"]
+            else:
+                # Heuristic path (default, backward-compatible)
+                # info_map = compute_info_maps(images, patch_tokens)["info_map"]
+                info_map = compute_info_maps(images, patch_tokens)["info_map"]
 
         # Expand camera and register tokens to match batch size and sequence length
         camera_token = slice_expand_and_flatten(self.camera_token, B, S)
