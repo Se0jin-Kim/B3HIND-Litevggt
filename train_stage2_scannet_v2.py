@@ -134,12 +134,11 @@ def main():
     # use_learned_scorer=True + allow_scorer_grad=True (soft merge 활성화)
     model.aggregator.set_learned_scorer_mode(True)
 
-    # DINOv2 동결, 나머지 학습
+    # TokenScorer만 학습 — backward 비용 최소화
     for name, param in model.named_parameters():
-        param.requires_grad = 'patch_embed' not in name
-    n_frozen    = sum(p.numel() for p in model.parameters() if not p.requires_grad)
+        param.requires_grad = 'token_scorer' in name
     n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Frozen: {n_frozen:,}  Trainable: {n_trainable:,}")
+    print(f"Trainable: {n_trainable:,}")
 
     # Optimizer
     optimizer = torch.optim.AdamW(
