@@ -580,23 +580,24 @@ def soft_merge_with_scores(
     """
     N, T, C = x.shape
 
-    # 1. src/dst 분리: scores 낮은 순 r개 → src(merge 대상)
-    scores_flat = scores
-    src_idx_flat = scores_flat.argsort(dim=-1)[:, :r]    # [N, r]
-    dst_idx_flat = scores_flat.argsort(dim=-1)[:, r:]    # [N, T-r]
+    with torch.no_grad():
+        # 1. src/dst 분리: argsort 한 번만 호출
+        sorted_idx = scores.argsort(dim=-1)
+        src_idx_flat = sorted_idx[:, :r]     # [N, r]  낮은 순 → merge 대상
+        dst_idx_flat = sorted_idx[:, r:]     # [N, T-r]
 
-    # 2. assign_idx: x_norm 기반 cosine similarity (detach — topology만 결정)
-    src_ref = x.detach().gather(1, src_idx_flat.unsqueeze(-1).expand(N, r, C))
-    dst_ref = x.detach().gather(1, dst_idx_flat.unsqueeze(-1).expand(N, T - r, C))
-    sim = torch.bmm(
-        F.normalize(src_ref, dim=-1),
-        F.normalize(dst_ref, dim=-1).transpose(1, 2),
-    )  # [N, r, T-r]
-    assign_idx = sim.argmax(dim=-1)  # [N, r]
+        # 2. assign_idx: x_norm 기반 cosine similarity (topology만 결정)
+        src_ref = x.detach().gather(1, src_idx_flat.unsqueeze(-1).expand(N, r, C))
+        dst_ref = x.detach().gather(1, dst_idx_flat.unsqueeze(-1).expand(N, T - r, C))
+        sim = torch.bmm(
+            F.normalize(src_ref, dim=-1),
+            F.normalize(dst_ref, dim=-1).transpose(1, 2),
+        )  # [N, r, T-r]
+        assign_idx = sim.argmax(dim=-1)  # [N, r]
 
-    # 3. src weights — scores를 통해 gradient 흐름
-    src_scores = scores_flat.gather(1, src_idx_flat)    # [N, r] grad 있음
-    src_weights = F.softmax(src_scores, dim=-1)         # [N, r] grad 있음
+    # 3. src weights — no_grad 밖: scores → gradient 흐름
+    src_scores = scores.gather(1, src_idx_flat)    # [N, r] grad 있음
+    src_weights = F.softmax(src_scores, dim=-1)    # [N, r] grad 있음
 
     def _apply_merge(t: torch.Tensor) -> torch.Tensor:
         """src/dst 분할과 weights를 재사용해 임의 텐서에 soft merge 적용."""

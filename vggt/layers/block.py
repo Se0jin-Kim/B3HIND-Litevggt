@@ -98,24 +98,21 @@ class Block(nn.Module):
             ):
                 from merging.merge import soft_merge_with_scores
                 # x_norm: [B, S*(special+patch), C], _cached_scores: [S, T_patch]
-                # 프레임별로 [inf×special | patch_scores] 붙인 뒤 전체 flatten
+                # 벡터화: [B,S,5] inf ++ [B,S,T_patch] → reshape → [B, S*1374]
                 B = x_norm.shape[0]
-                S = self._cached_scores.shape[0]
+                S, T_patch = self._cached_scores.shape
                 special_per_frame = 5  # camera 1 + register 4
 
-                scores_all_frames = []
-                for i in range(S):
-                    frame_special = torch.full(
-                        (B, special_per_frame), float('inf'),
-                        device=self._cached_scores.device,
-                        dtype=self._cached_scores.dtype,
-                    )
-                    frame_patch = self._cached_scores[i:i+1]  # [1, T_patch]
-                    scores_all_frames.append(
-                        torch.cat([frame_special, frame_patch], dim=1)
-                    )  # [1, special+patch]
-                scores_all = torch.cat(scores_all_frames, dim=1)
-                # [B, S*(special+patch)] = [B, T_total] — x_norm과 일치
+                special_scores = torch.full(
+                    (B, S, special_per_frame), float('inf'),
+                    device=self._cached_scores.device,
+                    dtype=self._cached_scores.dtype,
+                )  # [B, S, 5]
+                patch_scores = self._cached_scores.unsqueeze(0).expand(B, -1, -1)
+                # [B, S, T_patch]
+                scores_all = torch.cat([special_scores, patch_scores], dim=2)
+                scores_all = scores_all.reshape(B, S * (special_per_frame + T_patch))
+                # [B, S*1374] = [B, T_total] — x_norm과 일치
 
                 m, u = soft_merge_with_scores(
                     x_norm,
