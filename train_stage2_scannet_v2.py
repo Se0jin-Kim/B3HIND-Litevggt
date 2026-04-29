@@ -134,9 +134,17 @@ def main():
     # use_learned_scorer=True + allow_scorer_grad=True (soft merge 활성화)
     model.aggregator.set_learned_scorer_mode(True)
 
-    # TokenScorer만 학습 — backward 비용 최소화
+    # TokenScorer + 마지막 4개 global_block + depth_head 학습
+    trainable_keywords = [
+        'token_scorer',
+        'global_blocks.20',
+        'global_blocks.21',
+        'global_blocks.22',
+        'global_blocks.23',
+        'depth_head',
+    ]
     for name, param in model.named_parameters():
-        param.requires_grad = 'token_scorer' in name
+        param.requires_grad = any(k in name for k in trainable_keywords)
     n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Trainable: {n_trainable:,}")
 
