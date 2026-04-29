@@ -117,17 +117,14 @@ class Block(nn.Module):
                 scores_all = torch.cat(scores_all_frames, dim=1)
                 # [B, S*(special+patch)] = [B, T_total] — x_norm과 일치
 
-                merged, u = soft_merge_with_scores(
+                m, u = soft_merge_with_scores(
                     x_norm,
                     scores_all,
                     r=r,
                     w=self.patch_width,
                     h=self.patch_height,
                 )
-                # soft_merge_with_scores는 이미 merge된 결과를 직접 반환하므로
-                # m은 identity로 감싸고 u만 사용
-                m = lambda t, **kwargs: merged  # noqa: E731
-                u = u
+                # (m, u)가 token_merge_bipartite2d와 동일한 인터페이스
             else:
                 with torch.no_grad():
                     m, u = token_merge_bipartite2d(
