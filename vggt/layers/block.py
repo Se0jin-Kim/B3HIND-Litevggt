@@ -97,9 +97,28 @@ class Block(nn.Module):
                 and self._cached_scores is not None
             ):
                 from merging.merge import soft_merge_with_scores
+                # special token(5개)은 항상 보존 → inf score 부여
+                N_total = x_norm.shape[0]
+                T_total = x_norm.shape[1]
+                T_patch = self._cached_scores.shape[1]
+                special_len = T_total - T_patch
+
+                if special_len > 0:
+                    special_scores = torch.full(
+                        (N_total, special_len),
+                        float('inf'),
+                        device=self._cached_scores.device,
+                        dtype=self._cached_scores.dtype,
+                    )
+                    scores_all = torch.cat(
+                        [special_scores, self._cached_scores], dim=1
+                    )  # [N_total, T_total]
+                else:
+                    scores_all = self._cached_scores
+
                 merged, u = soft_merge_with_scores(
                     x_norm,
-                    self._cached_scores,
+                    scores_all,
                     r=r,
                     w=self.patch_width,
                     h=self.patch_height,
