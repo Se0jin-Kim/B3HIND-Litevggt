@@ -97,24 +97,25 @@ class Block(nn.Module):
                 and self._cached_scores is not None
             ):
                 from merging.merge import soft_merge_with_scores
-                # special token(5개)은 항상 보존 → inf score 부여
-                N_total = x_norm.shape[0]
-                T_total = x_norm.shape[1]
-                T_patch = self._cached_scores.shape[1]
-                special_len = T_total - T_patch
+                # x_norm: [B, S*(special+patch), C], _cached_scores: [S, T_patch]
+                # 프레임별로 [inf×special | patch_scores] 붙인 뒤 전체 flatten
+                B = x_norm.shape[0]
+                S = self._cached_scores.shape[0]
+                special_per_frame = 5  # camera 1 + register 4
 
-                if special_len > 0:
-                    special_scores = torch.full(
-                        (N_total, special_len),
-                        float('inf'),
+                scores_all_frames = []
+                for i in range(S):
+                    frame_special = torch.full(
+                        (B, special_per_frame), float('inf'),
                         device=self._cached_scores.device,
                         dtype=self._cached_scores.dtype,
                     )
-                    scores_all = torch.cat(
-                        [special_scores, self._cached_scores], dim=1
-                    )  # [N_total, T_total]
-                else:
-                    scores_all = self._cached_scores
+                    frame_patch = self._cached_scores[i:i+1]  # [1, T_patch]
+                    scores_all_frames.append(
+                        torch.cat([frame_special, frame_patch], dim=1)
+                    )  # [1, special+patch]
+                scores_all = torch.cat(scores_all_frames, dim=1)
+                # [B, S*(special+patch)] = [B, T_total] — x_norm과 일치
 
                 merged, u = soft_merge_with_scores(
                     x_norm,
