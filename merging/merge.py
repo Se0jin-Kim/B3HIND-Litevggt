@@ -560,3 +560,63 @@ def token_merge_bipartite2d(
 
     return merge, unmerge
 
+
+def soft_merge_with_scores(
+    x: torch.Tensor,        # [N, T, C]
+    scores: torch.Tensor,   # [N, T] TokenScorer 출력, grad 있음
+    r: int,                 # merge할 token 수
+    w: int, h: int,         # spatial grid 크기 (37, 37)
+    sx: int = 2, sy: int = 2,
+) -> tuple:
+    """
+    Soft weighted merge.
+    scores를 가중치로 사용하여 gradient가 TokenScorer까지 흐름.
+
+    핵심 변경:
+      기존: scatter_reduce(..., reduce="mean")  → gradient 차단
+      개선: scores 기반 softmax 가중치로 가중합 → gradient 흐름
+    """
+    N, T, C = x.shape
+
+    # 1. src/dst 분리: scores가 낮을수록 덜 중요 → src(merge 대상)
+    scores_flat = scores  # [N, T]
+    src_idx_flat = scores_flat.argsort(dim=-1)[:, :r]       # [N, r] 낮은 순
+    dst_idx_flat = scores_flat.argsort(dim=-1)[:, r:]       # [N, T-r] 높은 순
+
+    # 2. src, dst token 값 추출
+    src_tokens = x.gather(
+        1, src_idx_flat.unsqueeze(-1).expand(N, r, C)
+    )  # [N, r, C]
+    dst_tokens = x.gather(
+        1, dst_idx_flat.unsqueeze(-1).expand(N, T - r, C)
+    )  # [N, T-r, C]
+
+    # 3. 각 src를 가장 유사한 dst에 할당 (cosine similarity)
+    src_norm = F.normalize(src_tokens.detach(), dim=-1)   # [N, r, C]
+    dst_norm = F.normalize(dst_tokens.detach(), dim=-1)   # [N, T-r, C]
+    sim = torch.bmm(src_norm, dst_norm.transpose(1, 2))   # [N, r, T-r]
+    assign_idx = sim.argmax(dim=-1)                        # [N, r]
+
+    # 4. soft weighted sum — gradient가 scores를 통해 흐름
+    src_scores = scores_flat.gather(1, src_idx_flat)       # [N, r] grad 있음
+    src_weights = F.softmax(src_scores, dim=-1)            # [N, r] grad 있음
+
+    weighted_src = src_tokens * src_weights.unsqueeze(-1)  # [N, r, C]
+    assign_expanded = assign_idx.unsqueeze(-1).expand(N, r, C)
+
+    dst_merged = dst_tokens.clone()
+    dst_merged = dst_merged.scatter_add(1, assign_expanded, weighted_src)
+    # [N, T-r, C] — scores 기반 가중합 적용된 dst
+
+    # 5. unmerge: 각 src 위치를 해당 dst 값으로 복원
+    def unmerge(x_merged: torch.Tensor) -> torch.Tensor:
+        out = torch.zeros(N, T, C, dtype=x_merged.dtype, device=x_merged.device)
+        out.scatter_(1, dst_idx_flat.unsqueeze(-1).expand(N, T - r, C), x_merged)
+        src_restored = x_merged.gather(
+            1, assign_idx.unsqueeze(-1).expand(N, r, C)
+        )
+        out.scatter_(1, src_idx_flat.unsqueeze(-1).expand(N, r, C), src_restored)
+        return out  # [N, T, C]
+
+    return dst_merged, unmerge
+

@@ -91,20 +91,38 @@ class Block(nn.Module):
             merge_ratio = 0.9
             r = int(x_norm.shape[1] * merge_ratio)
 
-            with torch.no_grad():
-                m, u = token_merge_bipartite2d(
+            if (
+                getattr(self, "allow_scorer_grad", False)
+                and hasattr(self, "_cached_scores")
+                and self._cached_scores is not None
+            ):
+                from merging.merge import soft_merge_with_scores
+                merged, u = soft_merge_with_scores(
                     x_norm,
-                    self.patch_width,
-                    self.patch_height,
-                    2,
-                    2,
-                    r,
-                    False,
-                    generator,
-                    enable_protection=True,
-                    info_map=info_map,
+                    self._cached_scores,
+                    r=r,
+                    w=self.patch_width,
+                    h=self.patch_height,
                 )
-                
+                # soft_merge_with_scores는 이미 merge된 결과를 직접 반환하므로
+                # m은 identity로 감싸고 u만 사용
+                m = lambda t, **kwargs: merged  # noqa: E731
+                u = u
+            else:
+                with torch.no_grad():
+                    m, u = token_merge_bipartite2d(
+                        x_norm,
+                        self.patch_width,
+                        self.patch_height,
+                        2,
+                        2,
+                        r,
+                        False,
+                        generator,
+                        enable_protection=True,
+                        info_map=info_map,
+                    )
+
             m_u = (m, u)
 
         att_out = self.attn(x_norm, pos=pos, global_merging=global_merging,m_u = m_u )

@@ -180,6 +180,8 @@ class Aggregator(nn.Module):
             for name, p in self.named_parameters():
                 if not name.startswith("token_scorer."):
                     p.requires_grad = False
+        for blk in self.global_blocks:
+            blk.allow_scorer_grad = enabled
 
     def __build_patch_embed__(
         self,
@@ -271,10 +273,16 @@ class Aggregator(nn.Module):
                     images, patch_tokens,
                     learned_scores=learned_scores,
                 )["info_map"]
+                # scores를 [N, Hp*Wp] flat 형태로 global_blocks에 전달
+                scores_flat = learned_scores.squeeze(1).flatten(1)  # [N, Hp*Wp]
+                for blk in self.global_blocks:
+                    blk._cached_scores = scores_flat
             else:
                 # Heuristic path (default, backward-compatible)
                 # info_map = compute_info_maps(images, patch_tokens)["info_map"]
                 info_map = compute_info_maps(images, patch_tokens)["info_map"]
+                for blk in self.global_blocks:
+                    blk._cached_scores = None
 
         # Expand camera and register tokens to match batch size and sequence length
         camera_token = slice_expand_and_flatten(self.camera_token, B, S)
